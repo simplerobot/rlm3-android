@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SimpleRobots Lawnmower Control</string>
+    <string name="connect">Connect</string>
+    <string name="stop">STOP</string>
+</resources>
