@@ -12,6 +12,10 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.Socket;
+
 public class BackgroundThread extends Thread {
 
     public BackgroundThread(Context context, BackgroundNotifyInterface notify) {
@@ -40,32 +44,29 @@ public class BackgroundThread extends Thread {
             } else if (!isNetworkActive) {
                 waitForRequest();
             } else if (!isClientConnected) {
-                // TODO:
-                sleep(500);
-                isClientConnected = true;
+                clientConnect();
+            } else if (wantNotification) {
+                Log.i(LOG_TAG, "connected");
+                wantNotification = false;
+                notify.notifyConnected();
+            } else if (wantPing) {
+                sendPing();
+                wantPing = false;
             } else {
-                if (wantNotification) {
-                    Log.i(LOG_TAG, "connected");
-                    wantNotification = false;
-                    notify.notifyConnected();
-                }
                 waitForRequest();
             }
         } else {
             if (isClientConnected) {
-                // TODO:
-                sleep(500);
-                isClientConnected = false;
+                clientDisconnect();
             } else if (isNetworkActive) {
                 isNetworkActive = false;
             } else if (isNetworkInitialized) {
                 deinitNetwork();
+            } else if (wantNotification) {
+                Log.i(LOG_TAG, "disconnected");
+                wantNotification = false;
+                notify.notifyDisconnected();
             } else {
-                if (wantNotification) {
-                    Log.i(LOG_TAG, "disconnected");
-                    wantNotification = false;
-                    notify.notifyDisconnected();
-                }
                 waitForRequest();
             }
         }
@@ -75,6 +76,7 @@ public class BackgroundThread extends Thread {
         Log.i(LOG_TAG, "request connect");
         wantConnected = true;
         wantNotification = true;
+        wantPing = false;
         notify();
     }
 
@@ -82,6 +84,13 @@ public class BackgroundThread extends Thread {
         Log.i(LOG_TAG, "request disconnect");
         wantConnected = false;
         wantNotification = true;
+        wantPing = false;
+        notify();
+    }
+
+    public synchronized void requestPing() {
+        Log.i(LOG_TAG, "request ping");
+        wantPing = true;
         notify();
     }
 
@@ -146,6 +155,7 @@ public class BackgroundThread extends Thread {
 
             networkId = wifiManager.addNetwork(wifiConfig);
             if (networkId == -1) {
+                Log.i(LOG_TAG, "addNetwork failed");
                 connectionFailed();
                 return;
             }
@@ -156,6 +166,7 @@ public class BackgroundThread extends Thread {
                     .build();
 
             if (!wifiManager.enableNetwork(networkId, true)) {
+                Log.i(LOG_TAG, "enableNetwork failed");
                 connectionFailed();
                 return;
             }
@@ -195,6 +206,36 @@ public class BackgroundThread extends Thread {
         isNetworkInitialized = false;
     }
 
+    private void clientConnect() {
+        try {
+            socket = network.getSocketFactory().createSocket(ROBOT_WIFI_SERVER, ROBOT_WIFI_PORT);
+            output = socket.getOutputStream();
+            isClientConnected = true;
+        } catch (IOException e) {
+            Log.i(LOG_TAG, "createSocket failed " + e.getLocalizedMessage());
+            connectionFailed();
+        }
+    }
+
+    private void clientDisconnect() {
+        try {
+            socket.close();
+        } catch (IOException e) {
+        }
+        output = null;
+        socket = null;
+        isClientConnected = false;
+    }
+
+    private void sendPing() {
+        try {
+            output.write("a\n".getBytes());
+        } catch (IOException e) {
+            Log.i(LOG_TAG, "sendPing failed " + e.getLocalizedMessage());
+            connectionFailed();
+        }
+    }
+
     private synchronized void networkCallbackOnAvailable(Network network) {
         Log.i(LOG_TAG, "net available");
         this.network = network;
@@ -218,6 +259,8 @@ public class BackgroundThread extends Thread {
 
     static final String ROBOT_WIFI_SSID = "RLM3";
     static final String ROBOT_WIFI_PASSWORD = "ABCD1234";
+    static final String ROBOT_WIFI_SERVER = "10.168.154.1";
+    static final int ROBOT_WIFI_PORT = 37649;
 
     Context appContext;
     BackgroundNotifyInterface notify;
@@ -225,6 +268,7 @@ public class BackgroundThread extends Thread {
     boolean stop = false;
     boolean wantConnected = false;
     boolean wantNotification = false;
+    boolean wantPing = false;
 
     boolean isNetworkInitialized = false;
     boolean isNetworkActive = false;
@@ -232,6 +276,8 @@ public class BackgroundThread extends Thread {
 
     ConnectivityManager.NetworkCallback callback = null;
     Network network;
+    Socket socket;
+    OutputStream output;
     int networkId = -1;
 
     static final String LOG_TAG = "RLM3-BACK";
