@@ -13,6 +13,7 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 
@@ -210,7 +211,58 @@ public class BackgroundThread extends Thread {
         try {
             socket = network.getSocketFactory().createSocket(ROBOT_WIFI_SERVER, ROBOT_WIFI_PORT);
             output = socket.getOutputStream();
+            input = socket.getInputStream();
             isClientConnected = true;
+
+            // Create a client connection that will forward messages to this object.
+            clientThread = new Thread() {
+                public void run() {
+                    try {
+                        Crc8 crc = new Crc8();
+
+                        while (length > 0) {
+                            int type = input.read();
+                            if (type < 0)
+                                return;
+                            int length = getMessageLength((byte)type);
+                            if (length < 2)
+                            {
+                                Log.e(LOG_TAG, "Received invalid message type " + type + " length " + length);
+                                clientCallbackInputMessageError();
+                                return;
+                            }
+
+                            byte[] data = new byte[length - 2];
+                            input.read(data);
+
+                            crc.add(type);
+
+                            int length = getMessageLength(type);
+
+                            switch (type) {
+                                case MESSAGE_TYPE_NONE:
+                                    byte crc = (byte)input.read();
+                                    break;
+
+                                case MESSAGE_TYPE_VERSION:
+                                    break;
+
+                                case MESSAGE_TYPE_SYNC:
+                                    break;
+
+                                case MESSAGE_TYPE_INVALID:
+                                default:
+                                    Log.e(LOG_TAG, "Received invalid message type " + type);
+                                    clientCallbackInputMessageError();
+                                    break;
+
+                            }
+                        }
+                    } catch (IOException e) {
+                    }
+                }
+            };
+
         } catch (IOException e) {
             Log.i(LOG_TAG, "createSocket failed " + e.getLocalizedMessage());
             connectionFailed();
@@ -220,7 +272,9 @@ public class BackgroundThread extends Thread {
     private void clientDisconnect() {
         try {
             socket.close();
+            clientThread.wait();
         } catch (IOException e) {
+        } catch (InterruptedException e) {
         }
         output = null;
         socket = null;
@@ -229,6 +283,7 @@ public class BackgroundThread extends Thread {
 
     private void sendPing() {
         try {
+            ByteBuffer ping = ByteBuffer.allocate();
             output.write("a\n".getBytes());
         } catch (IOException e) {
             Log.i(LOG_TAG, "sendPing failed " + e.getLocalizedMessage());
@@ -257,6 +312,27 @@ public class BackgroundThread extends Thread {
         notify();
     }
 
+    private synchronized void clientCallbackInputMessageError() {
+        Log.i(LOG_TAG, "client error");
+        isNetworkActive = false;
+        connectionFailed();
+        notify();
+    }
+
+    private static int getMessageLength(byte type) {
+        switch (type) {
+            case MESSAGE_TYPE_NONE:
+                return 2;
+            case MESSAGE_TYPE_VERSION:
+                return 10;
+            case MESSAGE_TYPE_SYNC:
+                return 6;
+            case MESSAGE_TYPE_INVALID:
+            default:
+                return 0;
+        }
+    }
+
     static final String ROBOT_WIFI_SSID = "RLM3";
     static final String ROBOT_WIFI_PASSWORD = "ABCD1234";
     static final String ROBOT_WIFI_SERVER = "10.168.154.1";
@@ -278,7 +354,15 @@ public class BackgroundThread extends Thread {
     Network network;
     Socket socket;
     OutputStream output;
+    InputStream input;
     int networkId = -1;
+    Thread clientThread;
 
     static final String LOG_TAG = "RLM3-BACK";
+
+    static final byte MESSAGE_TYPE_INVALID  = 0;
+    static final byte MESSAGE_TYPE_NONE		= 1;
+    static final byte MESSAGE_TYPE_VERSION	= 2;
+    static final byte MESSAGE_TYPE_SYNC		= 3;
+    static final byte MESSAGE_TYPE_CONTROL	= 4;
 }
